@@ -1,0 +1,153 @@
+- name: ADO Playbook
+  hosts: ubuntu
+  become: yes
+  vars:
+    token: "{{token}}"
+    adoUrl: https://dev.azure.com/RegionsSandbox1 # replace ADO for our Org
+    agentIp: "{{ansible_default_ipv4.address}}"
+    packer_version: "1.5.5"
+    packer_arch: "amd64"
+    packer_bin_path: /usr/local/bin
+
+  tasks:
+    - name: running apt-get update
+      apt:
+        update_cache: yes
+
+    - name: Install jq
+      apt:
+        pkg:
+          - jq
+          - python3-pip
+          - unzip
+
+    - name: install python packages
+      pip:
+        name:
+          - awscli
+          - requests
+          - boto3
+          - hvac
+          - hvac[parser]
+        executable: pip3
+
+    - name: Make Agent Directory
+      file:
+        path: /home/{{ ansible_user }}/agent
+        state: directory
+        recurse: yes
+        mode: 0755
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: fetch ADO agent
+      unarchive:
+        src: https://vstsagentpackage.azureedge.net/agent/2.165.2/vsts-agent-linux-x64-2.165.2.tar.gz
+        dest: /home/ubuntu/agent
+        remote_src: yes
+
+    - name: Install Dependencies
+      command: sudo /home/ubuntu/agent/bin/installdependencies.sh
+
+#    - name: Configure ADO
+#      command: "/home/ubuntu/agent/config.sh  --unattended  --url {{adoUrl}} --auth pat --token {{token}} --pool default --agent AWS-{{agentIp}} --work /home/ubuntu/agent/agent_work"
+#
+#    - name: Install ADO Service
+#      command: chdir=/home/ubuntu/agent sudo ./svc.sh install
+#
+#    - name: Start ADO Service
+#      command: chdir=/home/ubuntu/agent sudo ./svc.sh start
+
+    - name: Download and unarchive Packer.
+      unarchive:
+        src: https://releases.hashicorp.com/packer/{{ packer_version }}/packer_{{ packer_version }}_linux_{{ packer_arch }}.zip
+        dest: "{{ packer_bin_path }}"
+        remote_src: yes
+        creates: "{{ packer_bin_path }}/packer"
+      become: yes
+
+    - name: install vault command
+      unarchive:
+        src: https://releases.hashicorp.com/vault/1.4.2/vault_1.4.2_linux_amd64.zip
+        dest: /usr/local/bin/
+        remote_src: yes
+        creates: /usr/local/bin/vault
+
+#    - name: create directory
+#      file:
+#        path: ~/.ssh
+#        state: directory
+#        owner:
+#        mode: '0700'
+
+    - name: Create public keys
+      command: yes ~/.ssh/id_rsa | ssh-keygen -q -t rsa -N '' >/dev/null
+
+    - name: Check if Ruby is installed
+      command: which ruby
+      register: ruby_check
+      ignore_errors: yes
+
+    - block:
+      - name: Install dependencies for Ruby 2.7.1
+        apt:
+          pkg:
+            - build-essential
+            - automake
+            - autoconf
+            - libyaml-dev
+            - libxml2-dev
+            - libxslt-dev
+            - libc6-dev
+            - ncurses-dev
+            - libtool
+            - bison
+            - libssl-dev
+
+      - name: Create a building folder
+        file:
+          path:  /tmp/build_ruby
+          state: directory
+          mode: 'u+rwx'
+
+      - name: Download Ruby 2.7.1
+        get_url:
+          url: https://cache.ruby-lang.org/pub/ruby/2.7/ruby-2.7.1.tar.gz
+          dest: /tmp/build_ruby/ruby-2.7.1.tar.gz
+
+      - name: Unpack Ruby
+        unarchive:
+          src: /tmp/build_ruby/ruby-2.7.1.tar.gz
+          dest: /tmp/build_ruby/
+          remote_src: yes
+
+      - name: Build Ruby
+        command: >
+          {{ item }}
+          chdir=/tmp/build_ruby/ruby-2.7.1
+          creates=/usr/local/bin/ruby
+        with_items:
+          - ./configure --enable-shared
+          - make
+          - make install
+
+      - name: Add Ruby symlinks
+        file:
+          src: "/usr/local/bin/{{ item }}"
+          dest: "/usr/bin/{{ item }}"
+          state: link
+          force: yes
+        with_items:
+          - erb
+          - gem
+          - irb
+          - rake
+          - rdoc
+          - ruby
+
+      - name: Remove the building folder
+        file:
+          path:  /tmp/build_ruby
+          state: absent
+
+      when: ruby_check.rc != 0

@@ -1,0 +1,21 @@
+---
+- hosts: all
+  become: yes
+
+  tasks:
+    - name: user creation
+      user:
+        name: "{{ item }}"
+        state: absent
+        remove: yes
+      with_items:
+        - vasu
+        - srinath
+        - naveen
+        - sanddep
+        - srikanth
+
+    - name: JAVA INSTALLATION
+      yum:
+        name: java
+        state: absent
